@@ -7,6 +7,8 @@ import logging
 
 import pip
 
+from pip._internal.vcs.versioncontrol import vcs, RevOptions
+
 from functools import reduce
 from pathlib import Path
 
@@ -148,10 +150,14 @@ class GistLoader:
         self._ensure_clone_path_present()
 
         repo_path = os.path.join(self.clone_path, gist_hash)
+        git = vcs.get_backend_for_scheme("git+https")
         if not os.path.exists(repo_path):
-            logger.debug("Cloning ", url, " to ", repo_path)
-        # TODO: use pips VCS mechanics for cloning
-        #os.system("git clone %s %s" % (url, clone_path))
+            logger.debug("Cloning %s to %s", url, repo_path)
+            git.fetch_new(repo_path, url, RevOptions(git, "master"))
+        else:
+            logger.debug("Updating %s from %s", repo_path, url)
+            git.update(repo_path, url, RevOptions(git, "master"))
+
         return repo_path
 
     def load_module(self, fullname):
