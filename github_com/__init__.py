@@ -18,8 +18,12 @@ from nbformat import read
 
 
 from IPython.core.interactiveshell import InteractiveShell
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
+
+namespaces = OrderedDict()
+namespaces["github_com.gist"] = "https://gist.github.com/%s.git"
 
 class IntermediateModule:
     """Module for paths like `github_com.nvbn`."""
@@ -33,8 +37,11 @@ class GithubComFinder:
     """Handles `github_com....` modules."""
 
     def find_module(self, module_name, package_path):
-        if module_name.startswith("github_com.gist"):
-            return GistLoader()
+        for ns, url in namespaces.items():
+            if module_name.startswith(ns):
+                return GistLoader(ns, url)
+
+        # TODO: generalize this
         if module_name.startswith('github_com'):
             return GithubComLoader()
 
@@ -76,10 +83,13 @@ class NotebookImporter:
 
 
 class GistLoader:
-    def __init__(self):
+    def __init__(self, ns, url):
         # as per https://www.python.org/dev/peps/pep-0370/
         full_path = os.path.expanduser("~/.local/var/lib/pyremoteimport/")
         self.clone_path = full_path
+
+        self.ns = ns
+        self.url = url
 
     def _import_notebook(self, fullname):
         """import a notebook as a module"""
@@ -141,7 +151,7 @@ class GistLoader:
         Path(self.clone_path).mkdir(parents=True, exist_ok=True)
 
 
-    def _install_module(self, fullname, gist_hash):
+    def _install_gist(self, fullname, gist_hash):
         repo_path = os.path.join(self.clone_path, gist_hash)
 
         #if not self._is_installed(fullname):
@@ -160,6 +170,29 @@ class GistLoader:
 
         return repo_path
 
+    def _install_module(self, modulename):
+        self._ensure_clone_path_present()
+
+        module_path = modulename.replace(".", "/")
+
+        # TODO: might use hash of url instead of ns, because ns could be registered dynamically
+        repo_path = os.path.join(self.clone_path, self.ns, module_path)
+        Path(repo_path).mkdir(parents=True, exist_ok = True)
+
+        url = self.url % (modulename,)
+
+        git = vcs.get_backend_for_scheme("git+https")
+        if not os.path.exists(os.path.join(repo_path, ".git")):
+            logger.debug("Cloning %s to %s", url, repo_path)
+            git.fetch_new(repo_path, url, RevOptions(git, "master"))
+        else:
+            # TODO: should throttle here
+            logger.debug("Updating %s from %s", repo_path, url)
+            git.update(repo_path, url, RevOptions(git, "master"))
+
+        return repo_path
+
+
     def load_module(self, fullname):
         logger.debug(f"Trying to load module {fullname}")
 
@@ -172,12 +205,9 @@ class GistLoader:
         actual_module_root = parts[1]
         if actual_module_root.startswith("gist"):
             gist_hash = actual_module_root[len("gist"):]
+            repo_path = self._install_gist(fullname, gist_hash)
         else:
-            # TODO: GithubCom loader should be used here
-            # though it seems that gist importer is wider than Github importer
-            raise ImportError("Not a gist")
-
-        repo_path = self._install_module(fullname, gist_hash)
+            repo_path = self._install_module(actual_module_root)
         
         module_type, filepath = self._detect_module(repo_path, parts[2:])
 
@@ -232,6 +262,8 @@ class GithubComLoader:
 
         sys.modules[fullname] = module
 
+def register(namespace, url):
+    namespaces[namespace] = url
 
 logger.debug("Installing github remote packages finder")
 sys.meta_path.append(GithubComFinder())
