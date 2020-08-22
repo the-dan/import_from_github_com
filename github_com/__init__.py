@@ -173,6 +173,7 @@ class GistLoader:
     def _install_module(self, modulename):
         self._ensure_clone_path_present()
 
+        modulename = modulename.replace("_minus_", "-")
         module_path = modulename.replace(".", "/")
 
         # TODO: might use hash of url instead of ns, because ns could be registered dynamically
